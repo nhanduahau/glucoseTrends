@@ -32,6 +32,9 @@ def generate_glucose_report():
 
         # Convert Time & Sort
         df[time_col] = pd.to_datetime(df[time_col])
+        # Strip timezone if present to ensure consistent local time plotting
+        if df[time_col].dt.tz is not None:
+            df[time_col] = df[time_col].dt.tz_localize(None)
         df = df.sort_values(by=time_col)
 
         # Convert measurement to numeric, replacing invalid values with NaN
@@ -47,12 +50,15 @@ def generate_glucose_report():
         # Convert Unit (mg/dL -> mmol/L)
         df['Glucose_mmol'] = df[measure_col] / 18.0
 
-        # Filter Last 7 Days (Based on data, not system time)
-        last_date = df[time_col].max()
-        start_date = last_date - pd.Timedelta(days=6)
+        # Filter Last 7 Days (Full days from 00:00 start to 23:59 end)
+        max_ts = df[time_col].max()
+        end_date = max_ts.replace(hour=23, minute=59, second=59, microsecond=999999)
+        start_date = (end_date - pd.Timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         
-        mask = (df[time_col] >= start_date) & (df[time_col] <= last_date)
+        mask = (df[time_col] >= start_date) & (df[time_col] <= end_date)
         df_week = df.loc[mask].copy()
+
+        print(f"Analysis Period: {start_date} to {end_date}")
 
         if df_week.empty:
             print("No data found for the analysis period.")
@@ -61,7 +67,13 @@ def generate_glucose_report():
         # --- 3. CALCULATE STATISTICS ---
         
         # A. Hourly Average (For Smoother Trend Line)
-        df_hourly = df_week.set_index(time_col).resample('h')['Glucose_mmol'].mean().reset_index().dropna()
+        # Create a full hourly range to ensure the chart starts exactly at start_date
+        full_range = pd.date_range(start=start_date, end=end_date, freq='h')
+        
+        # Resample and then reindex to force the full time range
+        df_resampled = df_week.set_index(time_col).resample('h')['Glucose_mmol'].mean()
+        df_hourly = df_resampled.reindex(full_range).reset_index()
+        df_hourly.columns = [time_col, 'Glucose_mmol'] # Rename columns properly
 
         # B. Weekly Average (Based on Raw Data)
         weekly_avg = df_week['Glucose_mmol'].mean()
@@ -83,8 +95,12 @@ def generate_glucose_report():
         ax1.axhspan(10.0, 20.0, color='#FCF3CF', alpha=0.5, label='High (> 10.0)')
 
         # Plot Trend Line (Smooth curve)
+        # Handle NaNs for plotting (matplotlib skips NaNs automatically, creating gaps)
         ax1.plot(df_hourly[time_col], df_hourly['Glucose_mmol'], 
                  color='#2980B9', linewidth=3, linestyle='-', label='Hourly Avg Glucose')
+        
+        # Explicitly mark the start of the day (00:00) with a vertical line
+        ax1.axvline(start_date, color='black', linestyle='-', linewidth=1.5, alpha=0.5)
         
         # Plot Weekly Average Line
         ax1.axhline(y=weekly_avg, color='purple', linestyle='--', linewidth=2)
@@ -98,9 +114,22 @@ def generate_glucose_report():
         ax1.set_ylim(3, 11.5)
         ax1.set_title(f'7-Day Glucose Trends (Hourly Average)', fontsize=14, fontweight='bold')
         ax1.set_ylabel('Glucose (mmol/L)')
+        
+        # Ensure x-axis covers the full 7-day range
+        ax1.set_xlim(start_date, end_date)
+        
+        # Major ticks at 06:00 (Labels)
+        ax1.xaxis.set_major_locator(mdates.HourLocator(byhour=6))
         ax1.xaxis.set_major_formatter(mdates.DateFormatter('%d/%m\n%H:%M'))
+        
+        # Minor ticks at 00:00 (Midnight) for grid lines
+        ax1.xaxis.set_minor_locator(mdates.HourLocator(byhour=0))
+        
+        # Grid settings: Stronger grid for midnight (minor), lighter for 6am (major)
+        ax1.grid(True, which='minor', color='gray', linestyle='--', linewidth=1, alpha=0.5)
+        ax1.grid(True, which='major', color='gray', linestyle=':', linewidth=0.5, alpha=0.3)
+        
         ax1.legend(loc='upper left', frameon=True)
-        ax1.grid(True, alpha=0.5)
 
         # === CHART 2: DAILY SUMMARY (RAW DATA) ===
         dates = daily_stats['Date_Only']
