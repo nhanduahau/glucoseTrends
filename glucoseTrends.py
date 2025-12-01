@@ -34,6 +34,16 @@ def generate_glucose_report():
         df[time_col] = pd.to_datetime(df[time_col])
         df = df.sort_values(by=time_col)
 
+        # Convert measurement to numeric, replacing invalid values with NaN
+        df[measure_col] = pd.to_numeric(df[measure_col], errors='coerce')
+        
+        # Remove rows with invalid measurements
+        original_count = len(df)
+        df = df.dropna(subset=[measure_col])
+        removed_count = original_count - len(df)
+        if removed_count > 0:
+            print(f"--> Removed {removed_count} invalid measurement(s) (e.g., 'Out of range')")
+
         # Convert Unit (mg/dL -> mmol/L)
         df['Glucose_mmol'] = df[measure_col] / 18.0
 
@@ -72,9 +82,9 @@ def generate_glucose_report():
         ax1.axhspan(3.9, 10.0, color='#E8F8F5', alpha=1.0, label='Target (3.9 - 10.0)')
         ax1.axhspan(10.0, 20.0, color='#FCF3CF', alpha=0.5, label='High (> 10.0)')
 
-        # Plot Trend Line
+        # Plot Trend Line (Smooth curve)
         ax1.plot(df_hourly[time_col], df_hourly['Glucose_mmol'], 
-                 color='#2980B9', linewidth=2, marker='o', markersize=4, label='Hourly Avg Glucose')
+                 color='#2980B9', linewidth=3, linestyle='-', label='Hourly Avg Glucose')
         
         # Plot Weekly Average Line
         ax1.axhline(y=weekly_avg, color='purple', linestyle='--', linewidth=2)
